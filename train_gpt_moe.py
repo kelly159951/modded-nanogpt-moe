@@ -461,11 +461,17 @@ class Hyperparameters:
     warmup_iters : int = 0
     warmdown_iters : int = 1308 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
     weight_decay : float = 0.0
+    optimizer3 : str = 'muon' # choices: adamw, muon
     # evaluation and logging hyperparams
     val_loss_every : int = 125 # every how many steps to evaluate val loss? 0 for only at the end
     val_tokens : int = 10485760 # how many tokens of validation data? it's important to keep this fixed for consistent comparisons
     save_every : int = 0 # every how many steps to save the checkpoint? 0 for only at the end
 args = Hyperparameters()
+for arg in sys.argv[1:]:
+    if arg.startswith('--optimizer3='):
+        args.optimizer3 = arg.split('=', 1)[1].lower()
+if args.optimizer3 not in ('adamw', 'muon'):
+    raise ValueError(f"unsupported optimizer3: {args.optimizer3}")
 
 # set up DDP (distributed data parallel). torchrun sets this env variable
 assert torch.cuda.is_available()
@@ -522,8 +528,12 @@ muon_params = all_h_params
 optimizer1 = torch.optim.AdamW([raw_model.transformer.wte.weight], lr=0.3,   betas=(0.9, 0.95), weight_decay=args.weight_decay, fused=True)
 optimizer2 = torch.optim.AdamW([raw_model.lm_head.weight], lr=0.002, betas=(0.9, 0.95), weight_decay=args.weight_decay, fused=True)
 
-optimizer3 = Muon(muon_params,                                     lr=0.02,  momentum=0.95)
+if args.optimizer3 == 'adamw':
+    optimizer3 = torch.optim.AdamW(muon_params, lr=0.02, betas=(0.9, 0.95), weight_decay=args.weight_decay, fused=True)
+else:
+    optimizer3 = Muon(muon_params,                                     lr=0.02,  momentum=0.95)
 optimizers = [optimizer1, optimizer2, optimizer3]
+run_id = f"{args.optimizer3}-{uuid.uuid4()}"
 # learning rate decay scheduler (linear warmup and warmdown)
 def get_lr(it):
     assert it <= args.num_iterations
@@ -541,7 +551,6 @@ schedulers = [torch.optim.lr_scheduler.LambdaLR(opt, get_lr) for opt in optimize
 
 # begin logging
 if master_process:
-    run_id = str(uuid.uuid4())
     logdir = 'logs/%s/' % run_id
     os.makedirs(logdir, exist_ok=True)
     logfile = 'logs/%s.txt' % run_id
@@ -561,6 +570,7 @@ if master_process:
     # init wandb
     wandb_project = "modded-nanogpt-moe"
     wandb_run = wandb.init(project=wandb_project, name=run_id, config={
+        'optimizer3': args.optimizer3,
         'data': {
             'input_bin': args.input_bin,
             'input_val_bin': args.input_val_bin,
@@ -595,14 +605,10 @@ if master_process:
                 'fused': bool(optimizer2.param_groups[0].get('fused', False)),
                 'weight_decay': args.weight_decay,
             },
-            'muon_blocks': {
-                'type': 'Muon',
+            'blocks': {
+                'type': type(optimizer3).__name__,
                 'lr': optimizer3.param_groups[0]['lr'],
-                'momentum': optimizer3.defaults.get('momentum', None),
-                'nesterov': optimizer3.defaults.get('nesterov', None),
-                'backend': optimizer3.defaults.get('backend', None),
-                'backend_steps': optimizer3.defaults.get('backend_steps', None),
-            }
+            },
         },
         'model': {
             'vocab_size': num_vocab,
