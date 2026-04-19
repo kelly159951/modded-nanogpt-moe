@@ -16,6 +16,8 @@ import torch._inductor.config as config
 from torch.nn.parallel import DistributedDataParallel as DDP
 import wandb
 
+from coupled_muon import CoupledMuon, build_dense_coupled_muon_param_groups
+
 # -----------------------------------------------------------------------------
 # Muon optimizer
 
@@ -345,7 +347,7 @@ class Hyperparameters:
     warmup_iters : int = 0
     warmdown_iters : int = 1308 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
     weight_decay : float = 0
-    optimizer3 : str = 'muon' # choices: adamw, muon
+    optimizer3 : str = 'muon' # choices: adamw, muon, coupled_muon
     # evaluation and logging hyperparams
     val_loss_every : int = 125 # every how many steps to evaluate val loss? 0 for only at the end
     val_tokens : int = 10485760 # how many tokens of validation data? it's important to keep this fixed for consistent comparisons
@@ -354,7 +356,7 @@ args = Hyperparameters()
 for arg in sys.argv[1:]:
     if arg.startswith('--optimizer3='):
         args.optimizer3 = arg.split('=', 1)[1].lower()
-if args.optimizer3 not in ('adamw', 'muon'):
+if args.optimizer3 not in ('adamw', 'muon', 'coupled_muon'):
     raise ValueError(f"unsupported optimizer3: {args.optimizer3}")
 
 # set up DDP (distributed data parallel). torchrun sets this env variable
@@ -410,6 +412,17 @@ optimizer1 = torch.optim.Adam([raw_model.transformer.wte.weight], lr=0.3,   beta
 optimizer2 = torch.optim.Adam([raw_model.lm_head.weight],         lr=0.002, betas=(0.9, 0.95), fused=True)
 if args.optimizer3 == 'adamw':
     optimizer3 = torch.optim.AdamW(raw_model.transformer.h.parameters(), lr=0.02, betas=(0.9, 0.95), weight_decay=args.weight_decay, fused=True)
+elif args.optimizer3 == 'coupled_muon':
+    coupled_pairs, muon_params, adamw_params = build_dense_coupled_muon_param_groups(raw_model)
+    optimizer3 = CoupledMuon(
+        lr=0.02,
+        wd=args.weight_decay,
+        coupled_pairs=coupled_pairs,
+        muon_params=muon_params,
+        momentum=0.95,
+        adamw_params=adamw_params,
+        use_multi_head=True,
+    )
 else:
     optimizer3 = Muon(raw_model.transformer.h.parameters(),           lr=0.02,  momentum=0.95)
 optimizers = [optimizer1, optimizer2, optimizer3]
