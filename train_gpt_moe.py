@@ -546,7 +546,8 @@ elif args.optimizer3 == 'coupled_muon':
 else:
     optimizer3 = Muon(muon_params,                                     lr=0.02,  momentum=0.95)
 optimizers = [optimizer1, optimizer2, optimizer3]
-run_id = f"{args.optimizer3}-{uuid.uuid4()}"
+model_variant = "moe"
+run_id = f"{model_variant}-{args.optimizer3}-{uuid.uuid4()}"
 # learning rate decay scheduler (linear warmup and warmdown)
 def get_lr(it):
     assert it <= args.num_iterations
@@ -582,7 +583,8 @@ if master_process:
         f.write('='*100 + '\n')
     # init wandb
     wandb_project = "modded-nanogpt-moe"
-    wandb_run = wandb.init(project=wandb_project, name=run_id, config={
+    wandb_run = wandb.init(project=wandb_project, name=run_id, tags=[model_variant, args.optimizer3], config={
+        'model_variant': model_variant,
         'optimizer3': args.optimizer3,
         'data': {
             'input_bin': args.input_bin,

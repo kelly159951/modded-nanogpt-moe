@@ -182,6 +182,9 @@ class CoupledMuon(torch.optim.Optimizer):
         adjusted_ratio = 0.2 * math.sqrt(max(A, B))
         return lr * adjusted_ratio
 
+    def scale_muon_update(self, update):
+        return update * max(1, update.size(0) / update.size(1)) ** 0.5
+
     def step(self, closure=None):
         loss = None
         if closure is not None:
@@ -317,11 +320,10 @@ class CoupledMuon(torch.optim.Optimizer):
 
                 u_A = zeropower_via_newtonschulz5(u_A_c, steps=ns_steps)
                 u_B = zeropower_via_newtonschulz5(u_B_c, steps=ns_steps)
-
-                adjusted_lr_A = self.adjust_lr_for_muon(lr, param_A.shape)
-                adjusted_lr_B = self.adjust_lr_for_muon(lr, param_B.shape)
-                param_A.data.mul_(1 - lr * wd).add_(u_A, alpha=-adjusted_lr_A)
-                param_B.data.mul_(1 - lr * wd).add_(u_B, alpha=-adjusted_lr_B)
+                u_A = self.scale_muon_update(u_A)
+                u_B = self.scale_muon_update(u_B)
+                param_A.data.add_(u_A, alpha=-lr)
+                param_B.data.add_(u_B, alpha=-lr)
 
                 processed.add(param_A)
                 processed.add(param_B)
@@ -346,8 +348,8 @@ class CoupledMuon(torch.optim.Optimizer):
                     g = buf
 
                 u = zeropower_via_newtonschulz5(g, steps=ns_steps)
-                adjusted_lr = self.adjust_lr_for_muon(lr, p.shape)
-                p.data.mul_(1 - lr * wd).add_(u, alpha=-adjusted_lr)
+                u = self.scale_muon_update(u)
+                p.data.add_(u, alpha=-lr)
 
             params = [p for p in group["params"] if not self.state[p].get("use_coupled", False) and not self.state[p].get("use_muon", False)]
             beta1, beta2 = group["adamw_betas"]
